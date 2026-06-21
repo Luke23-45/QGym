@@ -127,9 +127,10 @@ class DiffDiscreteEventSystem(gym.Env):
     def __init__(self, network, mu, h, draw_service, draw_inter_arrivals, init_time = 0, batch = 1, queue_event_options = None,
                  straight_through_min = False,
                  queue_lim = None, temp = 1, seed = 3003,
+                 max_time = 10000.0,
                  device = "cpu", f_hook = False, f_verbose = False, reset = False, use_sb = False):
 
-
+        self.max_time = max_time
         self.device = device
         self.state = torch.Generator(device=self.device)
         if seed is not None:
@@ -423,7 +424,7 @@ class DiffDiscreteEventSystem(gym.Env):
         self.env_state = next_state
         self.obs = obs
 
-        done = False
+        done = bool((time.max() > self.max_time).item())
         truncated = False
         reward = torch.clamp(-cost / 1000.0, min=-50.0, max=0.0)
 
@@ -458,8 +459,9 @@ class BatchedEnv:
 
     def __init__(self, network, mu, h, draw_service, draw_inter_arrivals,
                  init_time=0, batch=50, queue_event_options=None,
-                 queue_lim=None, temp=1, seed=3003, device="cpu"):
+                 queue_lim=None, temp=1, seed=3003, max_time=10000.0, device="cpu"):
 
+        self.max_time = max_time
         self.device = torch.device(device) if isinstance(device, str) else device
         self.B = batch
         self.q = network.size()[-1]
@@ -591,7 +593,7 @@ class BatchedEnv:
             if max_cols * 2 < self.st_data.size(-1):
                 self.st_data = self.st_data[:, :, :max_cols]
 
-        done = np.zeros(self.B, dtype=bool)
+        done = (self.time.squeeze(-1) > self.max_time).cpu().numpy()
         reward = torch.clamp(-cost / 1000.0, min=-50.0, max=0.0).detach().cpu().numpy()
         infos = [{} for _ in range(self.B)]
         return self.queues.detach().cpu().numpy(), reward, done, infos
