@@ -165,6 +165,9 @@ class DiffDiscreteEventSystem(gym.Env):
         else:
             self.time_elapsed = torch.tensor([0.]).to(self.device)
 
+        self.max_steps = 10000
+        self.steps = 0
+
         self.time_weight_queue_len = torch.zeros(self.network.size()[-1]).to(self.device)
         self.queue_len_dist = {}
         self.marg_queue_len_dist = [{} for _ in range(self.q)]
@@ -214,6 +217,7 @@ class DiffDiscreteEventSystem(gym.Env):
 
         self.obs = Obs(queues, time)
         self.env_state = EnvState(queues, time, self.st_data, arrival_times)
+        self.steps = 0
 
         return Obs(queues, time), EnvState(queues, time, self.st_data, arrival_times)
 
@@ -424,7 +428,8 @@ class DiffDiscreteEventSystem(gym.Env):
         self.env_state = next_state
         self.obs = obs
 
-        done = bool((time.max() > self.max_time).item())
+        self.steps += 1
+        done = bool(self.steps >= self.max_steps)
         truncated = False
         reward = torch.clamp(-cost / 1000.0, min=-50.0, max=0.0)
 
@@ -461,7 +466,7 @@ class BatchedEnv:
                  init_time=0, batch=50, queue_event_options=None,
                  queue_lim=None, temp=1, seed=3003, max_time=10000.0, device="cpu"):
 
-        self.max_time = max_time
+        self.max_steps = 10000
         self.device = torch.device(device) if isinstance(device, str) else device
         self.B = batch
         self.q = network.size()[-1]
@@ -507,6 +512,7 @@ class BatchedEnv:
         self.arrival_times = self.draw_inter_arrivals(time)
         self.queues = torch.zeros(self.B, self.q, device=self.device)
         self.time = time
+        self.steps = np.zeros(self.B, dtype=int)
         return self.queues.detach().cpu().numpy()
 
     def step(self, actions):
@@ -593,7 +599,25 @@ class BatchedEnv:
             if max_cols * 2 < self.st_data.size(-1):
                 self.st_data = self.st_data[:, :, :max_cols]
 
-        done = (self.time.squeeze(-1) > self.max_time).cpu().numpy()
+        self.steps += 1
+        done = (self.steps >= self.max_steps)
         reward = torch.clamp(-cost / 1000.0, min=-50.0, max=0.0).detach().cpu().numpy()
         infos = [{} for _ in range(self.B)]
+        
+        if done.any():
+            terminal_queues = self.queues.clone().detach().cpu().numpy()
+            reset_mask = torch.tensor(done, device=self.device)
+            self.steps[done] = 0
+            self.time[reset_mask] = 0.0
+            self.queues[reset_mask] = 0.0
+            self.st_counts[reset_mask] = 0
+            
+            all_new_arrivals = self.draw_inter_arrivals(self.time)
+            self.arrival_times[reset_mask] = all_new_arrivals[reset_mask]
+            
+            for b in range(self.B):
+                if done[b]:
+                    infos[b]["terminal_observation"] = terminal_queues[b]
+                    infos[b]["TimeLimit.truncated"] = True
+
         return self.queues.detach().cpu().numpy(), reward, done, infos
