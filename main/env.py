@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import math
 import torch.optim as optim
-import gym
+import gymnasium as gym
 import sys
 import itertools
 from typing import NamedTuple

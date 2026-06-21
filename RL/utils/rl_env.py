@@ -6,7 +6,7 @@ sys.path.append(project_root)
 print(project_root)
 import numpy as np
 import torch
-from gym import spaces
+from gymnasium import spaces
 from main.env import DiffDiscreteEventSystem
 from typing import NamedTuple
 

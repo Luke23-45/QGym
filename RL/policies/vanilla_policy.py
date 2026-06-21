@@ -1,9 +1,9 @@
 import sys
 sys.path.append('../')
 
-import gym
+import gymnasium as gym
 from stable_baselines3.common.type_aliases import PyTorchObs, Schedule
-from gym import spaces
+from gymnasium import spaces
 from stable_baselines3 import PPO
 import numpy as np
 import torch.nn.functional as F
@@ -11,7 +11,6 @@ import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
-import gym
 from typing import Union
 import torch.distributions.one_hot_categorical as one_hot_sample
 from typing import NamedTuple
