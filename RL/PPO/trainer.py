@@ -164,8 +164,8 @@ class CustomPPOTrainer(PPO):
                 approx_kl_divs = []
                 
                 # Get all rollout data for policy training
-                for rollout_data in self.rollout_buffer.get():
-                
+                for rollout_data in self.rollout_buffer.get(self.batch_size):
+
                     actions = rollout_data.actions
                     if isinstance(self.action_space, spaces.Discrete):
                         # Convert discrete action from float to long
@@ -217,6 +217,10 @@ class CustomPPOTrainer(PPO):
                     policy_loss.backward()
                     th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                     self.optimizer_policy.step()
+
+                    # Reset gradients after policy phase so the shared encoder
+                    # does not accumulate policy-phase gradients into the value phase.
+                    self.policy.zero_grad()
 
                     self.policy_train_iter += 1
 
@@ -272,166 +276,6 @@ class CustomPPOTrainer(PPO):
             if self.clip_range_vf is not None:
                 self.logger.record("train/clip_range_vf", clip_range_vf)
 
-    def construct_batch(self):
-        lex_batch = []
-        obs_batch = []
-        state_batch = []
-        total_cost_batch = []
-        time_weight_queue_len_batch = []
-
-
-        for dq_idx in range(self.actors):
-
-            dq = self.raw_env[dq_idx]
-            lex = th.zeros(dq.batch, dq.s, dq.q)
-            obs, state = dq.reset(seed = dq.seed)
-            total_cost = th.tensor([[0.]])
-            time_weight_queue_len = th.tensor([[0.]])
-
-            lex_batch.append(lex)
-            obs_batch.append(obs)
-            state_batch.append(state)
-            total_cost_batch.append(total_cost)
-            time_weight_queue_len_batch.append(time_weight_queue_len)
-
-        
-        return lex_batch, obs_batch, state_batch, total_cost_batch, time_weight_queue_len_batch
-
-    # def collect_rollouts(
-    #     self,
-    #     env: VecEnv,
-    #     callback: BaseCallback,
-    #     rollout_buffer: RolloutBuffer,
-    #     n_rollout_steps: int,
-    # ) -> bool:
-    #     """
-    #     Collect experiences using the current policy and fill a ``RolloutBuffer``.
-    #     The term rollout here refers to the model-free notion and should not
-    #     be used with the concept of rollout used in model-based RL or planning.
-
-    #     :param env: The training environment
-    #     :param callback: Callback that will be called at each step
-    #         (and at the beginning and end of the rollout)
-    #     :param rollout_buffer: Buffer to fill with rollouts
-    #     :param n_rollout_steps: Number of experiences to collect per environment
-    #     :return: True if function returned with at least `n_rollout_steps`
-    #         collected, False if callback terminated rollout prematurely.
-    #     """
-    #     assert self._last_obs is not None, "No previous observation was provided"
-    #     # Switch to eval mode (this affects batch norm / dropout)
-    #     self.policy.set_training_mode(False)
-
-    #     n_steps = 0
-    #     rollout_buffer.reset()
-    #     # Sample new weights for the state dependent exploration
-    #     if self.use_sde:
-    #         self.policy.reset_noise(env.num_envs)
-
-    #     callback.on_rollout_start()
-    #     # collect_roll_out_time_start = time.time()
-    #     lex_batch, obs_batch, state_batch, total_cost_batch, time_weight_queue_len_batch = self.construct_batch()
-    #     test_dq_batch = self.env
-
-    #     while n_steps < n_rollout_steps:
-    #         # start_time = time.time()
-    #         if self.use_sde and self.sde_sample_freq > 0 and n_steps % self.sde_sample_freq == 0:
-    #             # Sample a new noise matrix
-    #             self.policy.reset_noise(env.num_envs)
-
-    #         with th.no_grad():
-    #             # Convert to pytorch tensor or to TensorDict
-    #             self.policy.printing = False
-    #             obs_tensor = obs_as_tensor(self._last_obs, self.device)
-    #             actions, values, log_probs = self.policy(obs_tensor)
-    #             self.policy.printing = False
-    #         actions = actions.cpu().numpy()
-
-
-    #         # Rescale and perform action
-    #         clipped_actions = actions
-
-    #         if isinstance(self.action_space, spaces.Box):
-    #             if self.policy.squash_output:
-    #                 # Unscale the actions to match env bounds
-    #                 # if they were previously squashed (scaled in [-1, 1])
-    #                 clipped_actions = self.policy.unscale_action(clipped_actions)
-    #             else:
-    #                 # Otherwise, clip the actions to avoid out of bound error
-    #                 # as we are sampling from an unbounded Gaussian distribution
-    #                 clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
-
-    #         # Rescale and perform action
-    #         new_obs, rewards, dones, _ = env.step(clipped_actions)
-    #         new_obs = new_obs.squeeze() 
-    #         # print(f'new_obs shape: {new_obs.shape}')
-    #         # print(f'rewards shape: {rewards.shape}')     
-    #         # print(f'dones: {dones}')  
-    #         # print(f'n step: {n_steps} step_time: {dones}')
-
-
-    #         # print(f'collect_time: {collect_time_end - start_time}')
-
-    #         self.num_timesteps += env.num_envs
-
-    #         # Give access to local variables
-    #         callback.update_locals(locals())
-    #         if not callback.on_step():
-    #             return False
-
-    #         # self._update_info_buffer(infos)
-    #         n_steps += 1
-
-    #         if isinstance(self.action_space, spaces.Discrete):
-    #             # Reshape in case of discrete action
-    #             actions = actions.reshape(-1, 1)
-
-
-    #         # for idx, done in enumerate(dones):
-    #         #     if (
-    #         #         done
-    #         #         and infos[idx].get("terminal_observation") is not None
-    #         #         and infos[idx].get("TimeLimit.truncated", False)
-    #         #     ):
-    #         #         terminal_obs = self.policy.obs_to_tensor(infos[idx]["terminal_observation"])[0]
-    #         #         with th.no_grad():
-    #         #             terminal_value = self.policy.predict_values(terminal_obs)[0]  # type: ignore[arg-type]
-    #         #         rewards[idx] += self.gamma * terminal_value
-            
-    #         # print(f'enumerate_time: {enumerate_time_end - collect_time_end}')
-    #         rollout_buffer.add(
-    #                 self._last_obs,  # type: ignore[arg-type]
-    #                 actions,
-    #                 rewards,
-    #                 self._last_episode_starts,  # type: ignore[arg-type]
-    #                 values,
-    #                 log_probs,
-    #             )
-    #         self._last_obs = new_obs  # type: ignore[assignment]
-    #         self._last_episode_starts = dones
-    #         # end_time = time.time()
-
-    #         # print(f'collect_per_roll_out_time: {end_time - start_time}')
-
-    #     with th.no_grad():
-    #         # Compute value for the last timestep
-            
-    #         values = self.policy.predict_values(obs_as_tensor(new_obs, self.device))  # type: ignore[arg-type]
-
-        
-
-    #     retunrs_mean, returns_std= rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
-    #     #print("update_rollout_stats for policy")
-    #     #print(f'returns_mean: {retunrs_mean} returns_std: {returns_std}')
-    #     self.policy.update_rollout_stats(retunrs_mean, returns_std)
-
-    #     callback.update_locals(locals())
-
-    #     callback.on_rollout_end()
-    #     # collect_roll_out_time_end = time.time()
-
-    #     # print(f'collect_roll_out_time: {collect_roll_out_time_end - collect_roll_out_time_start}')
-
-    #     return True
     def collect_rollouts(
         self,
         env: VecEnv,
@@ -444,77 +288,56 @@ class CustomPPOTrainer(PPO):
         The term rollout here refers to the model-free notion and should not
         be used with the concept of rollout used in model-based RL or planning.
 
-        :param env: The training environment
+        Uses the vectorized ``env.step()`` (e.g. via ``SubprocVecEnv``) instead
+        of a manual Python for-loop over raw_env instances.
+
+        :param env: The training environment (a VecEnv)
         :param callback: Callback that will be called at each step
-            (and at the beginning and end of the rollout)
         :param rollout_buffer: Buffer to fill with rollouts
         :param n_rollout_steps: Number of experiences to collect per environment
         :return: True if function returned with at least `n_rollout_steps`
             collected, False if callback terminated rollout prematurely.
         """
         assert self._last_obs is not None, "No previous observation was provided"
-        # Switch to eval mode (this affects batch norm / dropout)
         self.policy.set_training_mode(False)
 
         n_steps = 0
         rollout_buffer.reset()
-        # Sample new weights for the state dependent exploration
         if self.use_sde:
             self.policy.reset_noise(env.num_envs)
 
         callback.on_rollout_start()
-        # collect_roll_out_time_start = time.time()
-        lex_batch, obs_batch, state_batch, total_cost_batch, time_weight_queue_len_batch = self.construct_batch()
-        train_dq_batch = self.raw_env
-
-        for idx, env in enumerate(train_dq_batch):
-            env.reset_env_seed()    
 
         print(f'n_rollout_steps: {n_rollout_steps}')
         while n_steps < n_rollout_steps:
-            # start_time = time.time()
             if self.use_sde and self.sde_sample_freq > 0 and n_steps % self.sde_sample_freq == 0:
-                # Sample a new noise matrix
                 self.policy.reset_noise(env.num_envs)
 
             with th.no_grad():
-                # Convert to pytorch tensor or to TensorDict
                 self.policy.printing = False
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
                 actions, values, log_probs = self.policy(obs_tensor)
                 self.policy.printing = False
             actions = actions.cpu().numpy()
 
-            # Rescale and perform action
             clipped_actions = actions
-
             if isinstance(self.action_space, spaces.Box):
                 if self.policy.squash_output:
-                    # Unscale the actions to match env bounds
-                    # if they were previously squashed (scaled in [-1, 1])
                     clipped_actions = self.policy.unscale_action(clipped_actions)
                 else:
-                    # Otherwise, clip the actions to avoid out of bound error
-                    # as we are sampling from an unbounded Gaussian distribution
                     clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
 
-            # Rescale and perform action
-            batch_rewards = []
-            batch_obs = []
-            for train_dq_idx in range(len(train_dq_batch)):
-                new_obs, rewards, dones, truncated, _ = train_dq_batch[train_dq_idx].step(clipped_actions)
-                new_obs = new_obs.squeeze() 
-                batch_rewards.append(rewards)
-                batch_obs.append(new_obs)
-            rewards = np.array(batch_rewards)
-            new_obs = np.array(batch_obs)
-            rewards = rewards.squeeze()
-            
-            dones = [False for _ in range(self.actors)]
+            # Vectorized step: SubprocVecEnv steps all envs in parallel
+            new_obs, rewards, dones, infos = env.step(clipped_actions)
 
-            # self.num_timesteps += env.num_envs
+            # Strip full env state from infos before passing to callback ???
+            # it is never used by the trainer and causes OOM via pickle
+            # serialization in SubprocVecEnv's pipe.
+            for i in range(len(infos)):
+                infos[i].pop('state', None)
 
-            # Give access to local variables
+            self.num_timesteps += env.num_envs
+
             callback.update_locals(locals())
             if not callback.on_step():
                 return False
@@ -522,41 +345,29 @@ class CustomPPOTrainer(PPO):
             n_steps += 1
 
             if isinstance(self.action_space, spaces.Discrete):
-                # Reshape in case of discrete action
                 actions = actions.reshape(-1, 1)
 
-            # print(f'enumerate_time: {enumerate_time_end - collect_time_end}')
             rollout_buffer.add(
-                    self._last_obs,  # type: ignore[arg-type]
-                    actions,
-                    rewards,
-                    self._last_episode_starts,  # type: ignore[arg-type]
-                    values,
-                    log_probs,
-                )
-            self._last_obs = new_obs  # type: ignore[assignment]
+                self._last_obs,
+                actions,
+                rewards,
+                self._last_episode_starts,
+                values,
+                log_probs,
+            )
+            self._last_obs = new_obs
             self._last_episode_starts = dones
-            # end_time = time.time()
-
-            # print(f'collect_per_roll_out_time: {end_time - start_time}')
 
         with th.no_grad():
-            # Compute value for the last timestep
-            
-            values = self.policy.predict_values(obs_as_tensor(new_obs, self.device))  # type: ignore[arg-type]
+            values = self.policy.predict_values(obs_as_tensor(new_obs, self.device))
 
-        
-        dones = np.array(dones)
-        retunrs_mean, returns_std= rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
-        #print("update_rollout_stats for policy")
-        #print(f'returns_mean: {retunrs_mean} returns_std: {returns_std}')
-        self.policy.update_rollout_stats(retunrs_mean, returns_std)
+        dones = np.asarray(dones, dtype=np.float32)
+        returns_mean, returns_std = rollout_buffer.compute_returns_and_advantage(
+            last_values=values, dones=dones
+        )
+        self.policy.update_rollout_stats(returns_mean, returns_std)
 
         callback.update_locals(locals())
-
         callback.on_rollout_end()
-        # collect_roll_out_time_end = time.time()
-
-        # print(f'collect_roll_out_time: {collect_roll_out_time_end - collect_roll_out_time_start}')
 
         return True 

@@ -107,10 +107,9 @@ class RL_Wrapper_P_DiffDiscreteEventSystem(DiffDiscreteEventSystem):
         return queues.cpu().numpy(), {}
     
     def reset_env_seed(self):
-        seed = self.seed
-        # print(f"seed: {seed}")  
-        if seed is not None:
-            self.state = np.random.RandomState(seed)
+        if self.seed is not None:
+            self.state = torch.Generator(device=self.device)
+            self.state.manual_seed(self.seed)
 
 
 def load_rl_p_env(env_config, temp, batch, seed, policy_name, device):
@@ -126,13 +125,13 @@ def load_rl_p_env(env_config, temp, batch, seed, policy_name, device):
         network_path = os.path.join(project_root, 'configs', 'env_data', env_type, f'{env_type}_network.npy')
         env_config['network'] = np.load(network_path)
 
-    env_config['network'] = torch.tensor(env_config['network']).float()
+    env_config['network'] = torch.as_tensor(env_config['network'], dtype=torch.float32)
 
 
     if env_config['mu'] is None:
         mu_path = os.path.join(project_root, 'configs', 'env_data', env_type, f'{env_type}_mu.npy')
         env_config['mu'] = np.load(mu_path)
-    env_config['mu'] = torch.tensor(env_config['mu']).float()
+    env_config['mu'] = torch.as_tensor(env_config['mu'], dtype=torch.float32)
 
     orig_s, orig_q = env_config['network'].size()
 
@@ -156,7 +155,7 @@ def load_rl_p_env(env_config, temp, batch, seed, policy_name, device):
 
     lam_type = env_config['lam_type']
     lam_params = env_config['lam_params']
-    h = torch.tensor(env_config['h'])
+    h = torch.as_tensor(env_config['h'])
 
     if lam_params['val'] is None:
         lam_r_path = os.path.join(project_root, 'configs', 'env_data', env_type, f'{env_type}_lam.npy')
@@ -165,14 +164,15 @@ def load_rl_p_env(env_config, temp, batch, seed, policy_name, device):
         lam_r = lam_params['val']
     def lam(t):
             if lam_type == 'constant':
-                lam = lam_r
+                lam_t = torch.as_tensor(lam_r, device=t.device, dtype=t.dtype)
             elif lam_type == 'step':
-                is_surge = 1*(t.data.cpu().numpy() <= lam_params['t_step'])
-                lam = is_surge * np.array(lam_params['val1']) + (1 - is_surge) * np.array(lam_params['val2'])
+                is_surge = (t <= lam_params['t_step']).float()
+                v1 = torch.as_tensor(lam_params['val1'], device=t.device, dtype=t.dtype)
+                v2 = torch.as_tensor(lam_params['val2'], device=t.device, dtype=t.dtype)
+                lam_t = is_surge * v1 + (1 - is_surge) * v2
             else:
-                return 'Nonvalid arrival rate'
-            
-            return lam
+                raise ValueError(f'Nonvalid arrival rate type: {lam_type}')
+            return lam_t
         
 
     if env_config['queue_event_options'] == 'custom':
@@ -181,20 +181,14 @@ def load_rl_p_env(env_config, temp, batch, seed, policy_name, device):
 
 
     def draw_inter_arrivals(self, time):
-
-        def inter_arrival_dists(state, batch, t):
-            exps = state.exponential(1, (batch, orig_q))
-            lam_rate = lam(t)
-            return exps / lam_rate
-
-        interarrivals = torch.tensor(inter_arrival_dists(self.state, self.batch, time)).to(self.device)
-        return interarrivals
+        uniform = torch.rand(self.batch, orig_q, generator=self.state, device=self.device)
+        exps = -torch.log(1.0 - uniform)
+        lam_rate = lam(time)
+        return exps / lam_rate
     
     def draw_service(self, time):
-        def service_dists(state, batch, t):
-            return state.exponential(1, (batch, orig_q))
-        service = torch.tensor(service_dists(self.state, self.batch, time)).to(self.device)
-        return service
+        uniform = torch.rand(self.batch, orig_q, generator=self.state, device=self.device)
+        return -torch.log(1.0 - uniform)
 
     # def draw_service(self, time):
     #     def service_dists(state, batch, t):

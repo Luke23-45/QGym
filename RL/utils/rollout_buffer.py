@@ -133,23 +133,15 @@ class CustomRolloutBuffer(RolloutBuffer):
 
 
         if self.normalize_advantage:
-            if self.per_iter_normal_value:
-                self.adv_std = adv_std
-            else:
-                if self.iterations == 1:
-                    self.adv_std = adv_std
+            self.adv_std = adv_std
 
         if self.normalize_value:
-            if self.per_iter_normal_value:
-                self.returns_mean = returns_mean
-                self.returns_std = returns_std * self.var_scaler
-            else:
-                if self.iterations == 1:
-                    self.returns_mean = returns_mean
-                    self.returns_std = returns_std * self.var_scaler
+            self.returns_mean = returns_mean
+            self.returns_std = returns_std * self.var_scaler
 
         # normalize the advantages and returns
-        self.advantages = self.advantages / self.adv_std
+        self.advantages = (self.advantages - self.advantages.mean()) / self.adv_std
+        self.advantages = np.clip(self.advantages, -10, 10)
         self.returns = (self.returns - self.returns_mean) / self.returns_std
 
         ### log normalization stats
