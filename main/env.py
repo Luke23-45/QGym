@@ -425,7 +425,7 @@ class DiffDiscreteEventSystem(gym.Env):
 
         done = False
         truncated = False
-        reward = -cost / 1000.0
+        reward = torch.clamp(-cost / 1000.0, min=-50.0, max=0.0)
 
         info = {"obs": obs, "state": next_state, "cost": cost, "event_time": event_time, "queues": queues}
 
@@ -592,6 +592,6 @@ class BatchedEnv:
                 self.st_data = self.st_data[:, :, :max_cols]
 
         done = np.zeros(self.B, dtype=bool)
-        reward = (-cost / 1000.0).detach().cpu().numpy()
+        reward = torch.clamp(-cost / 1000.0, min=-50.0, max=0.0).detach().cpu().numpy()
         infos = [{} for _ in range(self.B)]
         return self.queues.detach().cpu().numpy(), reward, done, infos

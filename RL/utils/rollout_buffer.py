@@ -3,6 +3,10 @@ import numpy as np
 import torch as th
 from gymnasium import spaces
 
+REWARD_MIN = -50.0
+REWARD_MAX = 0.0
+RETURNS_STD_MAX = 1_000.0
+
 
 class CustomRolloutBuffer(RolloutBuffer):
     def __init__(self, *args, **kwargs):
@@ -82,6 +86,9 @@ class CustomRolloutBuffer(RolloutBuffer):
                     self.rewards_mean = rewards_mean
 
         ### normalize the rewards
+        # Clamp before GAE so a runaway queue cannot inject extreme bootstrap
+        # targets into the critic and create a value-feedback loop.
+        self.rewards = np.clip(self.rewards, REWARD_MIN, REWARD_MAX)
         self.rewards = self.rewards - self.rewards_mean
 
         if self.truncation:
@@ -137,7 +144,7 @@ class CustomRolloutBuffer(RolloutBuffer):
 
         if self.normalize_value:
             self.returns_mean = returns_mean
-            self.returns_std = returns_std * self.var_scaler
+            self.returns_std = min(returns_std * self.var_scaler, RETURNS_STD_MAX)
 
         # normalize the advantages and returns
         self.advantages = (self.advantages - self.advantages.mean()) / self.adv_std
